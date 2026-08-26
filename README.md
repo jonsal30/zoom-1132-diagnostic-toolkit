@@ -21,7 +21,21 @@ Every repair action follows:
 
 `discover -> snapshot -> backup -> change -> verify -> report`
 
-The first milestone is diagnostic-only. Destructive operations must be explicitly invoked and should be reversible where practical.
+Milestone 1 remains read-only. Destructive operations are intentionally deferred until diagnostics and rollback behavior are tested.
+
+## Implemented macOS checks
+
+- Zoom application presence
+- Zoom bundle version
+- macOS code-signature verification
+- known Zoom local-state locations
+- running Zoom/client/updater process inventory
+- system HTTP/HTTPS/SOCKS proxy detection
+- DNS resolution for `zoom.us`
+- timed HTTPS reachability for `zoom.us`
+- timed HTTPS reachability for `www3.zoom.us`
+- category-based concern/confidence scoring
+- JSON report export
 
 ## Quick start
 
@@ -31,17 +45,44 @@ swift run zoom-repair
 swift test
 ```
 
+Export a structured report:
+
+```bash
+swift run zoom-repair --json
+```
+
+Or choose a destination:
+
+```bash
+swift run zoom-repair --json ~/Desktop/zoom-1132-diagnostic.json
+```
+
+## Interpreting results
+
+A healthy network result does not mean Zoom must permit a meeting join. It means the implemented DNS/HTTPS path checks succeeded. If those checks are healthy while Zoom still returns 1132, preserve the report and investigate authentication/access behavior rather than repeatedly resetting the network.
+
+Likewise, the presence of normal Zoom cache or preference files is not classified as corruption by itself.
+
 ## Project status
 
-**Milestone 1: Diagnostic engine — in progress**
+**Milestone 1: Diagnostic engine — active**
 
-Planned milestones:
+Current sequence:
 
-1. Read-only macOS diagnostics
-2. Backup / reset / verify / rollback for local Zoom state
-3. HTML + JSON diagnostic bundle export
-4. Windows adapter
-5. Packaged macOS UI
+1. Read-only macOS diagnostics — active
+2. Regression fixtures and CI verification — active
+3. Backup / reset / verify / rollback for local Zoom state — next
+4. HTML diagnostic bundle export
+5. Windows adapter
+6. Packaged macOS UI
+
+## CI
+
+GitHub Actions is configured to run `swift build` and `swift test` on macOS for pushes to `main` and pull requests.
+
+## Privacy
+
+Diagnostic data is local-first. The project does not contain an automatic telemetry or bug-report upload path. Exported reports remain on the user's machine unless the user deliberately shares them.
 
 ## Disclaimer
 
