@@ -71,13 +71,39 @@ struct MacDiagnostics {
     }
 
     private func codeSignatureFinding() -> DiagnosticFinding {
-        commandFinding(
+        let codesign = runCommand(
+            executable: "/usr/bin/codesign",
+            arguments: ["--verify", "--deep", zoomPath]
+        )
+        let gatekeeper = runCommand(
+            executable: "/usr/sbin/spctl",
+            arguments: ["-a", "-vv", zoomPath]
+        )
+
+        let codesignHealthy = codesign.launched && codesign.status == 0
+        let gatekeeperHealthy = gatekeeper.launched && gatekeeper.status == 0
+
+        if codesignHealthy && gatekeeperHealthy {
+            return .init(
+                name: "Zoom Code Signature",
+                category: .installation,
+                state: .healthy,
+                confidence: 0.99,
+                evidence: "macOS codesign verification passed and Gatekeeper accepted the Zoom app as trusted/notarized."
+            )
+        }
+
+        let details = [
+            codesign.output.trimmingCharacters(in: .whitespacesAndNewlines),
+            gatekeeper.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        ].filter { !$0.isEmpty }.joined(separator: " | ")
+
+        return .init(
             name: "Zoom Code Signature",
             category: .installation,
-            executable: "/usr/bin/codesign",
-            arguments: ["--verify", "--deep", "--strict", zoomPath],
-            healthyWhen: { _ in true },
-            successEvidence: { _ in "macOS codesign verification completed successfully." }
+            state: .failed,
+            confidence: 0.95,
+            evidence: details.isEmpty ? "Zoom signature or Gatekeeper verification failed without diagnostic output." : details
         )
     }
 
