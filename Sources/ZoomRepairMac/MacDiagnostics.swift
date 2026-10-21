@@ -20,9 +20,13 @@ struct MacDiagnostics {
         if installed {
             findings.append(codeSignatureFinding())
             findings.append(versionFinding())
+            findings.append(urlSchemeFinding())
         }
 
         findings.append(localStateFinding())
+        findings.append(keychainFinding())
+        findings.append(decryptionFailureFinding())
+        findings.append(managedPolicyFinding())
         findings.append(processInventoryFinding())
         findings.append(proxyFinding())
 
@@ -67,6 +71,159 @@ struct MacDiagnostics {
             state: .healthy,
             confidence: 0.88,
             evidence: "Detected \(existing.count) of \(statePaths.count) known Zoom local-state locations. Presence is normal and is not treated as corruption without stronger evidence."
+        )
+    }
+
+    private func keychainFinding() -> DiagnosticFinding {
+        let keychain = "\(fm.homeDirectoryForCurrentUser.path)/Library/Keychains/login.keychain-db"
+        let services = ["Zoom Safe Meeting Storage", "Zoom Safe Storage"]
+        var present: [String] = []
+        var missing: [String] = []
+
+        for service in services {
+            let result = runCommand(
+                executable: "/usr/bin/security",
+                arguments: ["find-generic-password", "-s", service, keychain]
+            )
+            if result.launched && result.status == 0 {
+                present.append(service)
+            } else {
+                missing.append(service)
+            }
+        }
+
+        if missing.isEmpty {
+            return .init(
+                name: "Zoom Safe Keychain",
+                category: .localState,
+                state: .healthy,
+                confidence: 0.96,
+                evidence: "Both documented Zoom Safe keychain items are present. Secret values were not read."
+            )
+        }
+
+        return .init(
+            name: "Zoom Safe Keychain",
+            category: .localState,
+            state: .suspect,
+            confidence: 0.86,
+            evidence: "Missing keychain item(s): \(missing.joined(separator: ", ")). Present: \(present.isEmpty ? "none" : present.joined(separator: ", ")). Secret values were not read."
+        )
+    }
+
+    private func decryptionFailureFinding() -> DiagnosticFinding {
+        let dataPath = "\(fm.homeDirectoryForCurrentUser.path)/Library/Application Support/zoom.us/data"
+        guard fm.fileExists(atPath: dataPath) else {
+            return .init(
+                name: "Zoom Encrypted State",
+                category: .localState,
+                state: .unknown,
+                confidence: 0.70,
+                evidence: "Zoom data directory is not present yet."
+            )
+        }
+
+        let root = URL(fileURLWithPath: dataPath)
+        let keys: [URLResourceKey] = [.isRegularFileKey]
+        let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
+        var failures: [String] = []
+        while let url = enumerator?.nextObject() as? URL {
+            if url.lastPathComponent.hasSuffix(".decfail") {
+                failures.append(url.lastPathComponent)
+            }
+        }
+
+        if failures.isEmpty {
+            return .init(
+                name: "Zoom Encrypted State",
+                category: .localState,
+                state: .healthy,
+                confidence: 0.97,
+                evidence: "No Zoom .decfail encrypted-database failure markers were found."
+            )
+        }
+
+        return .init(
+            name: "Zoom Encrypted State",
+            category: .localState,
+            state: .failed,
+            confidence: 0.99,
+            evidence: "Detected Zoom decryption-failure marker(s): \(failures.sorted().joined(separator: ", ")). Rebuild local encrypted state only after Zoom Safe key material is present."
+        )
+    }
+
+    private func managedPolicyFinding() -> DiagnosticFinding {
+        let home = fm.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/Library/Preferences/us.zoom.config.plist",
+            "\(home)/Library/Managed Preferences/us.zoom.config.plist",
+            "/Library/Preferences/us.zoom.config.plist",
+            "/Library/Managed Preferences/us.zoom.config.plist"
+        ]
+        let existing = candidates.filter { fm.fileExists(atPath: $0) }
+        guard !existing.isEmpty else {
+            return .init(
+                name: "Zoom Managed Policy",
+                category: .localState,
+                state: .healthy,
+                confidence: 0.90,
+                evidence: "No standard Zoom managed-policy plist was found in user or system preference locations."
+            )
+        }
+
+        let sensitiveKeys = [
+            "SetWebDomain", "EnforceSignInToJoin", "EnforceAppSignInToJoin",
+            "ForceSSOURL", "zAutoSSOLogin", "zSSOHost", "Login_Domain",
+            "SetDevicePolicyToken", "NoSSO", "DisableLoginWithEmail"
+        ]
+        var hits: [String] = []
+        for path in existing {
+            guard let data = fm.contents(atPath: path),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                  let dict = plist as? [String: Any] else { continue }
+            let presentKeys = sensitiveKeys.filter { dict[$0] != nil }
+            if !presentKeys.isEmpty {
+                hits.append("\(URL(fileURLWithPath: path).lastPathComponent): \(presentKeys.joined(separator: ", "))")
+            }
+        }
+
+        return .init(
+            name: "Zoom Managed Policy",
+            category: .localState,
+            state: hits.isEmpty ? .suspect : .suspect,
+            confidence: hits.isEmpty ? 0.70 : 0.95,
+            evidence: hits.isEmpty
+                ? "Zoom configuration plist(s) exist but no known handshake-affecting keys were detected: \(existing.joined(separator: ", ")). Review manually."
+                : "Handshake-affecting managed Zoom policy key(s) detected: \(hits.joined(separator: "; "))."
+        )
+    }
+
+    private func urlSchemeFinding() -> DiagnosticFinding {
+        let plistPath = "\(zoomPath)/Contents/Info.plist"
+        guard let data = fm.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dict = plist as? [String: Any],
+              let types = dict["CFBundleURLTypes"] as? [[String: Any]] else {
+            return .init(
+                name: "Zoom URL Schemes",
+                category: .installation,
+                state: .unknown,
+                confidence: 0.60,
+                evidence: "Unable to inspect Zoom URL-scheme registration in Info.plist."
+            )
+        }
+
+        let schemes = types.flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] }
+        let required = ["zoommtg", "zoomus"]
+        let missing = required.filter { !schemes.contains($0) }
+        return .init(
+            name: "Zoom URL Schemes",
+            category: .installation,
+            state: missing.isEmpty ? .healthy : .failed,
+            confidence: 0.98,
+            evidence: missing.isEmpty
+                ? "Zoom registers both zoommtg and zoomus URL schemes."
+                : "Missing Zoom URL scheme(s): \(missing.joined(separator: ", "))."
         )
     }
 
@@ -252,8 +409,8 @@ struct MacDiagnostics {
 
         do {
             try process.run()
-            process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
             return (true, process.terminationStatus, String(decoding: data, as: UTF8.self))
         } catch {
             return (false, -1, "Unable to execute diagnostic: \(error.localizedDescription)")

@@ -27,8 +27,12 @@ Milestone 1 remains read-only. Destructive operations are intentionally deferred
 
 - Zoom application presence
 - Zoom bundle version
-- macOS code-signature verification
+- macOS code-signature and Gatekeeper verification
+- Zoom `zoommtg` / `zoomus` URL-scheme registration
 - known Zoom local-state locations
+- presence-only checks for `Zoom Safe Meeting Storage` and `Zoom Safe Storage` keychain items (secret values are never read)
+- detection of Zoom `*.decfail` encrypted-database failure markers
+- standard Zoom managed-policy plist detection for authentication/join-affecting settings
 - running Zoom/client/updater process inventory
 - system HTTP/HTTPS/SOCKS proxy detection
 - DNS resolution for `zoom.us`
@@ -61,7 +65,9 @@ swift run zoom-repair --json ~/Desktop/zoom-1132-diagnostic.json
 
 A healthy network result does not mean Zoom must permit a meeting join. It means the implemented DNS/HTTPS path checks succeeded. If those checks are healthy while Zoom still returns 1132, preserve the report and investigate authentication/access behavior rather than repeatedly resetting the network.
 
-Likewise, the presence of normal Zoom cache or preference files is not classified as corruption by itself.
+Likewise, the presence of normal Zoom cache or preference files is not classified as corruption by itself. `*.decfail` markers are different: they are treated as strong evidence of local encrypted-state failure.
+
+For the macOS repair sequence and an audit of the historical 1132 script, see [`docs/macos-repair-runbook.md`](docs/macos-repair-runbook.md).
 
 ## Project status
 
